@@ -1,0 +1,28 @@
+services:
+  api:
+    build: .
+    restart: unless-stopped
+    environment:
+      ALLOWED_ORIGINS: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
+      TRUST_PROXY: "true"
+    volumes:
+      - farm-data:/app/.data
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    environment:
+      APP_DOMAIN: ${APP_DOMAIN:?Set APP_DOMAIN in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      api:
+        condition: service_healthy
+volumes:
+  farm-data:
+  caddy-data:
+  caddy-config:

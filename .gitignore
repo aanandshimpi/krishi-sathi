@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.data/
+.tooling/
+*.log
+.env
+mobile/.dart_tool/
+mobile/build/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/android/key.properties
+*.jks
+*.keystore
+test-results/
+playwright-report/
+artifacts/*.apk

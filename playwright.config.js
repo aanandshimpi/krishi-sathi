@@ -1,0 +1,2 @@
+import {defineConfig} from '@playwright/test';
+export default defineConfig({testDir:'tests/browser',workers:1,timeout:45000,use:{baseURL:'http://127.0.0.1:5180',headless:true,launchOptions:{executablePath:process.env.CHROME_PATH||'/opt/google/chrome/chrome',args:['--no-sandbox']},trace:'retain-on-failure'},webServer:{command:'node scripts/test-server.mjs',url:'http://127.0.0.1:5180/api/health',reuseExistingServer:false},reporter:'list'});
