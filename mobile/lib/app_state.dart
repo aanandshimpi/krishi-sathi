@@ -66,6 +66,37 @@ class AppState extends ChangeNotifier {
       method: 'POST',
       body: body,
     );
+    await acceptAuthResult(result);
+  }
+
+  Future<void> requestOtp(String phone) async {
+    await api.request(
+      '/auth/otp/request',
+      method: 'POST',
+      body: {'phone': phone},
+    );
+  }
+
+  Future<Map<String, dynamic>> verifyOtp(String phone, String code) async {
+    final result = await api.request(
+      '/auth/otp/verify',
+      method: 'POST',
+      body: {'phone': phone, 'code': code},
+    );
+    if (result['needsProfile'] != true) await acceptAuthResult(result);
+    return result;
+  }
+
+  Future<void> completeOtp(Map<String, dynamic> body) async {
+    final result = await api.request(
+      '/auth/otp/complete',
+      method: 'POST',
+      body: body,
+    );
+    await acceptAuthResult(result);
+  }
+
+  Future<void> acceptAuthResult(Map<String, dynamic> result) async {
     await api.saveToken(result['token'] as String);
     user = result['user'] as Map<String, dynamic>;
     location = user!['lat'] != null

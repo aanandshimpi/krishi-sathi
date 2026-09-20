@@ -6,8 +6,9 @@ import {join} from 'node:path';
 import {scryptSync} from 'node:crypto';
 import {createApp,today,distanceKm} from '../server/app.mjs';
 let app,base,provider,farmer,other,team,booking,admin;
+const otpSent=new Map(),otpService={async send(phone){otpSent.set(phone,'123456');},async verify(phone,code){return otpSent.get(phone)===code;}};
 const dir=mkdtempSync(join(tmpdir(),'krishi-tests-'));
-before(async()=>{app=createApp({dbPath:join(dir,'test.sqlite')});app.db.prepare('INSERT INTO admins(name,phone,password,salt) VALUES(?,?,?,?)').run('KVK Test Admin','9333333333',scryptSync('Temporary-admin-123','test-salt',64).toString('hex'),'test-salt');await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${app.server.address().port}`;});
+before(async()=>{app=createApp({dbPath:join(dir,'test.sqlite'),otpService,legacyPasswordAuth:true});app.db.prepare('INSERT INTO admins(name,phone,password,salt) VALUES(?,?,?,?)').run('KVK Test Admin','9333333333',scryptSync('Temporary-admin-123','test-salt',64).toString('hex'),'test-salt');await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${app.server.address().port}`;});
 after(async()=>{await app.close();rmSync(dir,{recursive:true,force:true});});
 async function api(path,{token,body,method}={}){const res=await fetch(base+path,{method:method||(body?'POST':'GET'),headers:{...(token?{Authorization:`Bearer ${token}`} :{}),...(body?{'Content-Type':'application/json'}:{})},...(body?{body:JSON.stringify(body)}:{})});return {status:res.status,data:await res.json()};}
 const register=(phone,role)=>api('/api/auth/register',{body:{phone,password:'test-password-123',name:role==='farmer'?'Test Farmer':'Test Provider',age:35,address:'Solapur farm road',role}});
@@ -97,8 +98,44 @@ test('KVK admin can verify and hide teams, suspend accounts, cancel bookings and
  assert.equal((await api('/api/admin/admins',{token:admin.token,body:{name:'Second Admin',phone:'9444444444',password:'New-admin-pass-123'}})).status,201);
  assert.equal((await api('/api/admin/login',{body:{phone:'9444444444',password:'New-admin-pass-123'}})).data.user.mustChangePassword,true);
 });
+test('SMS OTP signs in existing users and creates new farmers without a password',async()=>{
+ const phone='9666666666';
+ assert.equal((await api('/api/auth/otp/request',{body:{phone:'123'}})).status,400);
+ assert.equal((await api('/api/auth/otp/request',{body:{phone}})).status,200);
+ assert.equal((await api('/api/auth/otp/request',{body:{phone}})).status,429);
+ assert.equal((await api('/api/auth/otp/verify',{body:{phone,code:'000000'}})).status,401);
+ const verified=await api('/api/auth/otp/verify',{body:{phone,code:'123456'}});
+ assert.equal(verified.status,200);assert.equal(verified.data.needsProfile,true);
+ const body={signupToken:verified.data.signupToken,name:'New Farmer',age:42,address:'Village near Solapur',role:'farmer'};
+ assert.equal((await api('/api/auth/otp/complete',{body:{...body,age:12}})).status,400);
+ const created=await api('/api/auth/otp/complete',{body});
+ assert.equal(created.status,201);assert.equal(created.data.user.phone,phone);
+ assert.equal((await api('/api/auth/otp/complete',{body})).status,401);
+ assert.equal((await api('/api/me',{token:created.data.token})).status,200);
+ assert.equal((await api('/api/auth/otp/request',{body:{phone:'9000000002'}})).status,200);
+ const existing=await api('/api/auth/otp/verify',{body:{phone:'9000000002',code:'123456'}});
+ assert.equal(existing.status,200);assert.equal(existing.data.user.id,farmer.user.id);
+ assert.equal((await api('/api/auth/otp/verify',{body:{phone:'9000000002',code:'123456'}})).status,401);
+});
+test('password registration is closed unless explicitly enabled for migration',async()=>{
+ const isolated=createApp({otpService});
+ await new Promise(resolve=>isolated.server.listen(0,'127.0.0.1',resolve));
+ try{
+  const response=await fetch(`http://127.0.0.1:${isolated.server.address().port}/api/auth/register`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:'9777777777',password:'guessable123',name:'Test',age:35,address:'Solapur',role:'farmer'})});
+  assert.equal(response.status,410);
+ }finally{await isolated.close();}
+});
+test('unconfigured production OTP endpoint fails closed',async()=>{
+ const isolated=createApp({otpService:{async send(){throw Object.assign(new Error('SMS unavailable'),{status:503});},async verify(){return false;}}});
+ await new Promise(resolve=>isolated.server.listen(0,'127.0.0.1',resolve));
+ try{
+  const response=await fetch(`http://127.0.0.1:${isolated.server.address().port}/api/auth/otp/request`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phone:'9888888888'})});
+  assert.equal(response.status,503);
+  assert.equal(isolated.db.prepare('SELECT COUNT(*) n FROM otp_challenges').get().n,0);
+ }finally{await isolated.close();}
+});
 test('data survives a database restart',async()=>{
- await app.close();app=createApp({dbPath:join(dir,'test.sqlite')});await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${app.server.address().port}`;
+ await app.close();app=createApp({dbPath:join(dir,'test.sqlite'),otpService,legacyPasswordAuth:true});await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));base=`http://127.0.0.1:${app.server.address().port}`;
  assert.equal((await api('/api/bookings',{token:farmer.token})).data.bookings.some(x=>x.id===booking.id),true);
  assert.equal((await api('/api/teams')).data.teams[0].name,'Local Team');
 });

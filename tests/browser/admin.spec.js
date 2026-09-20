@@ -1,7 +1,10 @@
 import {test,expect} from '@playwright/test';
 
 test('KVK admin signs in, changes temporary password, and manages records',async({page,request})=>{
- const provider=await request.post('/api/auth/register',{data:{name:'Admin Test Provider',phone:'9555555555',password:'provider-password-123',age:35,address:'Solapur',role:'provider'}});
+ await request.post('/api/auth/otp/request',{data:{phone:'9555555555'}});
+ const verification=await request.post('/api/auth/otp/verify',{data:{phone:'9555555555',code:'123456'}});
+ const ticket=(await verification.json()).signupToken;
+ const provider=await request.post('/api/auth/otp/complete',{data:{signupToken:ticket,name:'Admin Test Provider',age:35,address:'Solapur',role:'provider'}});
  expect(provider.ok()).toBeTruthy();const providerToken=(await provider.json()).token;
  const team=await request.put('/api/provider/team',{headers:{Authorization:`Bearer ${providerToken}`},data:{name:'KVK Review Team',place:'Solapur',crops:['Grape'],skills:['Harvesting'],people:4,price:500,lat:17.65,lng:75.9,available:true}});expect(team.ok()).toBeTruthy();
  const teamId=(await team.json()).team.id;

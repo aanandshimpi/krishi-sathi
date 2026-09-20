@@ -165,6 +165,41 @@ class AdminApi extends FakeApi {
   }
 }
 
+class OtpApi extends FakeApi {
+  @override
+  Future<void> saveToken(String value) async {
+    token = value;
+  }
+
+  @override
+  Future<Map<String, dynamic>> request(
+    String path, {
+    String method = 'GET',
+    Map<String, dynamic>? body,
+  }) async {
+    calls.add(path);
+    if (path == '/auth/otp/request') return {'sent': true};
+    if (path == '/auth/otp/verify') {
+      return {'needsProfile': true, 'signupToken': 'ticket'};
+    }
+    if (path == '/auth/otp/complete') {
+      return {
+        'token': 'session',
+        'user': {
+          'id': 42,
+          'name': body!['name'],
+          'phone': '9666666666',
+          'role': 'farmer',
+          'lat': null,
+        },
+      };
+    }
+    if (path == '/bookings') return {'bookings': <Map<String, dynamic>>[]};
+    if (path.startsWith('/teams')) return {'teams': <Map<String, dynamic>>[]};
+    return super.request(path, method: method, body: body);
+  }
+}
+
 void main() {
   testWidgets(
     'farmer home and Marathi navigation render without sample teams',
@@ -193,12 +228,42 @@ void main() {
     final api = FakeApi();
     final state = AppState(api: api);
     await tester.pumpWidget(MaterialApp(home: AuthPage(state: state)));
-    await tester.tap(find.widgetWithText(FilledButton, 'Sign in'));
+    await tester.tap(find.widgetWithText(FilledButton, 'Send SMS code'));
     await tester.pump();
     expect(find.text('Enter a 10-digit Indian number'), findsOneWidget);
     expect(api.calls, isEmpty);
     state.dispose();
   });
+  test(
+    'OTP phone verification leads to profile completion and a stored session',
+    () async {
+      final api = OtpApi();
+      final state = AppState(api: api);
+      await state.requestOtp('9666666666');
+      final result = await state.verifyOtp('9666666666', '123456');
+      expect(result['needsProfile'], true);
+      expect(state.user, isNull);
+      await state.completeOtp({
+        'signupToken': result['signupToken'],
+        'name': 'Test Farmer',
+        'age': 35,
+        'address': 'Solapur',
+        'role': 'farmer',
+      });
+      expect(state.user!['name'], 'Test Farmer');
+      expect(api.token, 'session');
+      expect(
+        api.calls,
+        containsAllInOrder([
+          '/auth/otp/request',
+          '/auth/otp/verify',
+          '/auth/otp/complete',
+          '/bookings',
+        ]),
+      );
+      state.dispose();
+    },
+  );
   test(
     'foreground GPS updates stop on pause and resume only when enabled',
     () async {

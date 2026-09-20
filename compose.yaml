@@ -5,6 +5,8 @@ services:
     environment:
       ALLOWED_ORIGINS: https://${APP_DOMAIN:?Set APP_DOMAIN in .env}
       TRUST_PROXY: "true"
+      MSG91_AUTH_KEY: ${MSG91_AUTH_KEY:-}
+      MSG91_TEMPLATE_ID: ${MSG91_TEMPLATE_ID:-}
     volumes:
       - farm-data:/app/.data
   proxy:

@@ -838,16 +838,18 @@ class _AuthPageState extends State<AuthPage> {
   final form = GlobalKey<FormState>();
   final name = TextEditingController(),
       phone = TextEditingController(),
+      code = TextEditingController(),
       password = TextEditingController(),
       age = TextEditingController(),
       address = TextEditingController();
-  bool register = false, busy = false, adminLogin = false;
-  String role = 'farmer';
+  bool busy = false, adminLogin = false;
+  String step = 'phone', role = 'farmer', signupToken = '';
   String? error;
   AppState get s => widget.state;
+
   @override
   void dispose() {
-    for (final c in [name, phone, password, age, address]) {
+    for (final c in [name, phone, code, password, age, address]) {
       c.dispose();
     }
     super.dispose();
@@ -860,21 +862,39 @@ class _AuthPageState extends State<AuthPage> {
       error = null;
     });
     try {
-      await s.authenticate(
-        {
+      if (adminLogin) {
+        await s.authenticate({
           'phone': phone.text.trim(),
           'password': password.text,
-          if (register) ...{
-            'name': name.text.trim(),
-            'age': int.parse(age.text),
-            'address': address.text.trim(),
-            'role': role,
-          },
-        },
-        register: register,
-        adminLogin: adminLogin,
-      );
-      if (mounted) Navigator.pop(context);
+        }, adminLogin: true);
+        if (mounted) Navigator.pop(context);
+      } else if (step == 'phone') {
+        await s.requestOtp(phone.text.trim());
+        if (mounted) setState(() => step = 'code');
+      } else if (step == 'code') {
+        final result = await s.verifyOtp(phone.text.trim(), code.text.trim());
+        if (result['needsProfile'] == true) {
+          if (mounted) {
+            setState(() {
+              signupToken = result['signupToken'] as String;
+              step = 'profile';
+            });
+          }
+        } else if (mounted) {
+          Navigator.pop(context);
+        }
+      } else {
+        await s.completeOtp({
+          'signupToken': signupToken,
+          'name': name.text.trim(),
+          'age': int.parse(age.text),
+          'address': address.text.trim(),
+          'role': role,
+          if (s.location != null) 'lat': s.location!.lat,
+          if (s.location != null) 'lng': s.location!.lng,
+        });
+        if (mounted) Navigator.pop(context);
+      }
     } catch (e) {
       if (mounted) setState(() => error = e.toString());
     } finally {
@@ -885,10 +905,16 @@ class _AuthPageState extends State<AuthPage> {
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
+      actions: [
+        TextButton(
+          onPressed: () => setState(s.language),
+          child: Text(s.marathi ? 'English' : 'मराठी'),
+        ),
+      ],
       title: Text(
         s.tr(
-          register ? 'Create account' : 'Sign in',
-          register ? 'नोंदणी करा' : 'लॉगिन करा',
+          adminLogin ? 'KVK admin sign in' : 'Continue with mobile',
+          adminLogin ? 'केव्हीके प्रशासक लॉगिन' : 'मोबाईलने पुढे जा',
         ),
       ),
     ),
@@ -897,21 +923,118 @@ class _AuthPageState extends State<AuthPage> {
       child: ListView(
         padding: const EdgeInsets.all(24),
         children: [
-          const Icon(Icons.eco, color: green, size: 50),
-          gap(24),
-          if (!register)
-            SwitchListTile(
-              title: Text(s.tr('KVK admin sign in', 'KVK प्रशासक लॉगिन')),
-              value: adminLogin,
-              onChanged: busy
-                  ? null
-                  : (value) => setState(() => adminLogin = value),
+          const Icon(Icons.eco, color: green, size: 54),
+          gap(20),
+          Text(
+            s.tr(
+              adminLogin
+                  ? 'Admin password'
+                  : step == 'phone'
+                  ? 'No password needed'
+                  : step == 'code'
+                  ? 'Enter SMS code'
+                  : 'A few details about you',
+              adminLogin
+                  ? 'प्रशासक पासवर्ड'
+                  : step == 'phone'
+                  ? 'पासवर्ड लागत नाही'
+                  : step == 'code'
+                  ? 'SMS कोड टाका'
+                  : 'तुमची थोडी माहिती',
             ),
-          if (register) ...[
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
+          gap(18),
+          if (step == 'phone') ...[
+            SwitchListTile(
+              title: Text(s.tr('KVK admin sign in', 'केव्हीके प्रशासक लॉगिन')),
+              value: adminLogin,
+              onChanged: busy ? null : (v) => setState(() => adminLogin = v),
+            ),
+            TextFormField(
+              controller: phone,
+              keyboardType: TextInputType.phone,
+              autofillHints: const [AutofillHints.telephoneNumber],
+              maxLength: 10,
+              decoration: InputDecoration(
+                labelText: s.tr('Mobile number', 'मोबाईल नंबर'),
+              ),
+              validator: (v) => RegExp(r'^[6-9]\d{9}$').hasMatch(v ?? '')
+                  ? null
+                  : s.tr(
+                      'Enter a 10-digit Indian number',
+                      '१० अंकी भारतीय मोबाईल नंबर द्या',
+                    ),
+            ),
+            gap(),
+            if (adminLogin)
+              TextFormField(
+                controller: password,
+                obscureText: true,
+                decoration: InputDecoration(
+                  labelText: s.tr('Admin password', 'प्रशासक पासवर्ड'),
+                ),
+                validator: (v) => v == null || v.length < 8
+                    ? s.tr('Enter admin password', 'प्रशासक पासवर्ड टाका')
+                    : null,
+              ),
+          ],
+          if (step == 'code') ...[
+            Text(
+              s.tr(
+                'Code sent to ${phone.text}.',
+                '${phone.text} वर कोड पाठवला आहे.',
+              ),
+            ),
+            gap(),
+            TextFormField(
+              controller: code,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              autofillHints: const [AutofillHints.oneTimeCode],
+              maxLength: 6,
+              decoration: InputDecoration(
+                labelText: s.tr('Six-digit SMS code', '६ अंकी SMS कोड'),
+              ),
+              validator: (v) => RegExp(r'^\d{6}$').hasMatch(v ?? '')
+                  ? null
+                  : s.tr('Enter six digits', '६ अंक टाका'),
+            ),
+            gap(),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () => setState(() {
+                      step = 'phone';
+                      code.clear();
+                      error = null;
+                    }),
+              child: Text(s.tr('Change number', 'नंबर बदला')),
+            ),
+            TextButton(
+              onPressed: busy
+                  ? null
+                  : () async {
+                      setState(() {
+                        busy = true;
+                        error = null;
+                      });
+                      try {
+                        await s.requestOtp(phone.text.trim());
+                      } catch (e) {
+                        if (mounted) setState(() => error = e.toString());
+                      } finally {
+                        if (mounted) setState(() => busy = false);
+                      }
+                    },
+              child: Text(s.tr('Resend code', 'कोड पुन्हा पाठवा')),
+            ),
+          ],
+          if (step == 'profile') ...[
             TextFormField(
               controller: name,
               decoration: InputDecoration(
-                labelText: s.tr('Full name', 'पूर्ण नाव'),
+                labelText: s.tr('Your name', 'तुमचे नाव'),
               ),
               validator: requiredText,
             ),
@@ -947,75 +1070,39 @@ class _AuthPageState extends State<AuthPage> {
             TextFormField(
               controller: address,
               decoration: InputDecoration(
-                labelText: s.tr('Farm / village address', 'शेत / गावाचा पत्ता'),
+                labelText: s.tr('Village / farm address', 'गाव / शेताचा पत्ता'),
               ),
               validator: requiredText,
             ),
-            gap(),
           ],
-          TextFormField(
-            controller: phone,
-            keyboardType: TextInputType.phone,
-            autofillHints: const [AutofillHints.telephoneNumber],
-            maxLength: 10,
-            decoration: InputDecoration(
-              labelText: s.tr('Mobile number', 'मोबाईल नंबर'),
-            ),
-            validator: (v) => RegExp(r'^[6-9]\d{9}$').hasMatch(v ?? '')
-                ? null
-                : s.tr(
-                    'Enter a 10-digit Indian number',
-                    '१० अंकी भारतीय मोबाईल नंबर द्या',
-                  ),
-          ),
-          gap(),
-          TextFormField(
-            controller: password,
-            obscureText: true,
-            autofillHints: [
-              register ? AutofillHints.newPassword : AutofillHints.password,
-            ],
-            decoration: InputDecoration(
-              labelText: s.tr(
-                'Password (8+ characters)',
-                'पासवर्ड (किमान ८ अक्षरे)',
-              ),
-            ),
-            validator: (v) => v == null || v.trim().length < 8
-                ? s.tr('Use at least 8 characters', 'किमान ८ अक्षरे वापरा')
-                : null,
-          ),
-          gap(),
           if (error != null) ...[
-            Text(error!, style: const TextStyle(color: Colors.red)),
             gap(),
+            Text(error!, style: const TextStyle(color: Colors.red)),
           ],
-          FilledButton(
-            onPressed: busy ? null : submit,
-            child: Text(
-              busy
-                  ? s.tr('Please wait…', 'थांबा…')
-                  : s.tr(
-                      register ? 'Create account' : 'Sign in',
-                      register ? 'नोंदणी करा' : 'लॉगिन करा',
-                    ),
-            ),
-          ),
-          gap(),
-          TextButton(
-            onPressed: busy
-                ? null
-                : () => setState(() {
-                    register = !register;
-                    adminLogin = false;
-                    error = null;
-                  }),
-            child: Text(
-              s.tr(
-                register
-                    ? 'Already registered? Sign in'
-                    : 'New here? Create account',
-                register ? 'खाते आहे? लॉगिन करा' : 'नवीन आहात? नोंदणी करा',
+          gap(16),
+          SizedBox(
+            height: 56,
+            child: FilledButton(
+              onPressed: busy ? null : submit,
+              child: Text(
+                busy
+                    ? s.tr('Please wait…', 'थांबा…')
+                    : s.tr(
+                        adminLogin
+                            ? 'Sign in'
+                            : step == 'phone'
+                            ? 'Send SMS code'
+                            : step == 'code'
+                            ? 'Verify code'
+                            : 'Finish',
+                        adminLogin
+                            ? 'लॉगिन करा'
+                            : step == 'phone'
+                            ? 'SMS कोड पाठवा'
+                            : step == 'code'
+                            ? 'कोड तपासा'
+                            : 'पूर्ण करा',
+                      ),
               ),
             ),
           ),

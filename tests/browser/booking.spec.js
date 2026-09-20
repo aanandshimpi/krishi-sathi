@@ -1,7 +1,9 @@
 import {test,expect} from '@playwright/test';
 async function register(page,{name,phone,role}){
- await page.goto('/');await page.locator('#profile').click();await page.locator('#auth-switch').click();
- await page.locator('[name=name]').fill(name);await page.locator('[name=age]').fill('35');await page.locator('[name=role]').selectOption(role);await page.locator('[name=address]').fill('Solapur farm road');await page.locator('[name=phone]').fill(phone);await page.locator('[name=password]').fill('Farm-password-123');await page.locator('#auth-form button[type=submit]').click();await expect(page.locator('#modal-root')).toBeEmpty();
+ await page.goto('/');await page.locator('#profile').click();
+ await page.locator('[name=phone]').fill(phone);await page.locator('#auth-form button[type=submit]').click();
+ await page.locator('[name=code]').fill('123456');await page.locator('#auth-form button[type=submit]').click();
+ await page.locator('[name=name]').fill(name);await page.locator('[name=age]').fill('35');await page.locator('[name=role]').selectOption(role);await page.locator('[name=address]').fill('Solapur farm road');await page.locator('#auth-form button[type=submit]').click();await expect(page.locator('#modal-root')).toBeEmpty();
 }
 test('provider publishes a team, farmer uses GPS and books, provider accepts, farmer cancels',async({browser})=>{
  const providerContext=await browser.newContext({permissions:['geolocation'],geolocation:{latitude:17.66,longitude:75.91}});const farmerContext=await browser.newContext({viewport:{width:390,height:844},permissions:['geolocation'],geolocation:{latitude:17.65,longitude:75.9}});

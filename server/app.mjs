@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { mkdirSync, chmodSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { resolve, extname, dirname } from 'node:path';
+import { createOtpService } from './otp.mjs';
 const derive = promisify(scrypt);
 const hash = value => createHash('sha256').update(value).digest('hex');
 const publicUser = u => ({ id:u.id, name:u.name, phone:u.phone, age:u.age, role:u.role, address:u.address, lat:u.lat, lng:u.lng, ...(u.role==='admin'?{mustChangePassword:!!u.must_change}:{}) });
@@ -19,7 +20,7 @@ function list(value,name){if(!Array.isArray(value)||value.length<1||value.length
 const crops = ['Grape','Pomegranate','Onion','Vegetables','Guava','General farm work','Animal husbandry'];
 const dateValue = value => {if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(value+'T00:00:00Z'))||new Date(value+'T00:00:00Z').toISOString().slice(0,10)!==value||value<today())fail(400,'Choose today or a future work date.');return value;};
 async function readBody(req){let size=0,parts=[];for await(const part of req){size+=part.length;if(size>16384)fail(413,'Request is too large.');parts.push(part);}try{const body=JSON.parse(Buffer.concat(parts).toString()||'{}');if(!body||typeof body!=='object'||Array.isArray(body))fail(400,'Use a JSON object.');return body;}catch(e){if(e.status)throw e;fail(400,'Invalid JSON.');}}
-export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],serveStatic=false,trustProxy=false}={}){
+export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],serveStatic=false,trustProxy=false,otpService=createOtpService(),legacyPasswordAuth=false}={}){
  if(dbPath!==':memory:'){mkdirSync(dirname(resolve(dbPath)),{recursive:true,mode:0o700});}
  const db = new DatabaseSync(dbPath);if(dbPath!==':memory:')chmodSync(dbPath,0o600);
  db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
@@ -40,6 +41,8 @@ export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],s
  db.exec(`CREATE TABLE IF NOT EXISTS admins(id INTEGER PRIMARY KEY,name TEXT NOT NULL,phone TEXT UNIQUE NOT NULL,password TEXT NOT NULL,salt TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,must_change INTEGER NOT NULL DEFAULT 1);
  CREATE TABLE IF NOT EXISTS admin_sessions(token_hash TEXT PRIMARY KEY,admin_id INTEGER NOT NULL REFERENCES admins(id),expires INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS admin_audit(id INTEGER PRIMARY KEY,admin_id INTEGER NOT NULL REFERENCES admins(id),action TEXT NOT NULL,target_type TEXT NOT NULL,target_id INTEGER NOT NULL,detail TEXT,created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP);`);
+ db.exec(`CREATE TABLE IF NOT EXISTS otp_challenges(phone TEXT PRIMARY KEY,expires INTEGER NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,sent_at INTEGER NOT NULL,window_start INTEGER NOT NULL,window_count INTEGER NOT NULL DEFAULT 1);
+ CREATE TABLE IF NOT EXISTS otp_signup_tickets(token_hash TEXT PRIMARY KEY,phone TEXT NOT NULL,expires INTEGER NOT NULL);`);
  const attempts=new Map();
  const userFor=req=>{const token=req.headers.authorization?.match(/^Bearer ([a-f0-9]{64})$/)?.[1];if(!token)fail(401,'Please sign in.');const tokenHash=hash(token);const admin=db.prepare('SELECT a.* FROM admins a JOIN admin_sessions s ON s.admin_id=a.id WHERE s.token_hash=? AND s.expires>? AND a.active=1').get(tokenHash,Date.now());if(admin)return {...admin,role:'admin',address:'KVK Solapur-I',age:null,lat:null,lng:null};const u=db.prepare('SELECT u.* FROM users u JOIN sessions s ON s.user_id=u.id WHERE s.token_hash=? AND s.expires>? AND u.suspended=0').get(tokenHash,Date.now());if(!u)fail(401,'Your session expired or this account was disabled. Please sign in again.');return u;};
  const role=(u,r)=>{if(u.role!==r)fail(403,`This action requires a ${r} account.`);};
@@ -59,7 +62,56 @@ export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],s
   try{
    const url=new URL(req.url,'http://localhost');const path=url.pathname;const method=req.method;
    if(path==='/api/health'&&method==='GET')return send(200,{status:'ok'});
+   if(path==='/api/auth/otp/request'&&method==='POST'){
+    const ip=trustProxy&&typeof req.headers['x-forwarded-for']==='string'?req.headers['x-forwarded-for'].split(',').at(-1).trim():req.socket.remoteAddress;
+    const key=`otp:${ip}`,now=Date.now(),limit=attempts.get(key);
+    if(limit&&limit.until>now&&limit.count>=30)fail(429,'Too many SMS requests. Try again later.');
+    attempts.set(key,{count:limit&&limit.until>now?limit.count+1:1,until:limit&&limit.until>now?limit.until:now+900000});
+    const b=await readBody(req),phone=text(b.phone,'Mobile number',10,10);
+    if(!/^[6-9]\d{9}$/.test(phone))fail(400,'Enter a valid 10-digit Indian mobile number.');
+    const old=db.prepare('SELECT * FROM otp_challenges WHERE phone=?').get(phone);
+    if(old&&now-old.sent_at<60000)fail(429,'Please wait one minute before requesting another code.');
+    if(old&&now-old.window_start<3600000&&old.window_count>=5)fail(429,'Too many codes requested. Try again in one hour.');
+    await otpService.send(phone);
+    const windowStart=old&&now-old.window_start<3600000?old.window_start:now;
+    const windowCount=old&&now-old.window_start<3600000?old.window_count+1:1;
+    db.prepare('INSERT INTO otp_challenges(phone,expires,attempts,sent_at,window_start,window_count) VALUES(?,?,0,?,?,?) ON CONFLICT(phone) DO UPDATE SET expires=excluded.expires,attempts=0,sent_at=excluded.sent_at,window_start=excluded.window_start,window_count=excluded.window_count').run(phone,now+300000,now,windowStart,windowCount);
+    return send(200,{sent:true,expiresIn:300});
+   }
+   if(path==='/api/auth/otp/verify'&&method==='POST'){
+    const b=await readBody(req),phone=text(b.phone,'Mobile number',10,10),code=text(b.code,'Verification code',6,6);
+    if(!/^[6-9]\d{9}$/.test(phone)||!/^[0-9]{6}$/.test(code))fail(400,'Enter the mobile number and six-digit code.');
+    const challenge=db.prepare('SELECT * FROM otp_challenges WHERE phone=?').get(phone);
+    if(!challenge||challenge.expires<Date.now()||challenge.attempts>=5)fail(401,'Code expired or too many attempts. Request a new code.');
+    db.prepare('UPDATE otp_challenges SET attempts=attempts+1 WHERE phone=?').run(phone);
+    if(!await otpService.verify(phone,code))fail(401,'Code is incorrect. Please try again.');
+    db.prepare('DELETE FROM otp_challenges WHERE phone=?').run(phone);
+    const u=db.prepare('SELECT * FROM users WHERE phone=?').get(phone);
+    if(u){if(u.suspended)fail(403,'This account is disabled. Please contact KVK.');return send(200,session(u));}
+    const ticket=randomBytes(32).toString('hex');db.prepare('DELETE FROM otp_signup_tickets WHERE phone=? OR expires<?').run(phone,Date.now());
+    db.prepare('INSERT INTO otp_signup_tickets(token_hash,phone,expires) VALUES(?,?,?)').run(hash(ticket),phone,Date.now()+600000);
+    return send(200,{needsProfile:true,signupToken:ticket});
+   }
+   if(path==='/api/auth/otp/complete'&&method==='POST'){
+    const b=await readBody(req),ticket=text(b.signupToken,'Verification ticket',64,64);
+    if(!/^[a-f0-9]{64}$/.test(ticket))fail(400,'Invalid verification ticket.');
+    const row=db.prepare('SELECT * FROM otp_signup_tickets WHERE token_hash=? AND expires>?').get(hash(ticket),Date.now());
+    if(!row)fail(401,'Verification expired. Please request a new code.');
+    const name=text(b.name,'Name',2,100),age=integer(b.age,'Age',18,110),address=text(b.address,'Village / address',3,300),userRole=b.role||'farmer';
+    if(!['farmer','provider'].includes(userRole))fail(400,'Choose farmer or labour provider.');
+    const loc=coordinates(b),password=randomBytes(32).toString('hex'),salt=randomBytes(16).toString('hex'),pass=(await derive(password,salt,64)).toString('hex');
+    let u;
+    transaction(()=>{
+     const consumed=db.prepare('DELETE FROM otp_signup_tickets WHERE token_hash=? AND expires>?').run(hash(ticket),Date.now());
+     if(!consumed.changes)fail(401,'Verification expired. Please request a new code.');
+     if(db.prepare('SELECT id FROM users WHERE phone=?').get(row.phone))fail(409,'This mobile number is already registered. Please sign in.');
+     const result=db.prepare('INSERT INTO users(name,phone,age,password,salt,role,address,lat,lng) VALUES(?,?,?,?,?,?,?,?,?)').run(name,row.phone,age,pass,salt,userRole,address,loc.lat,loc.lng);
+     u=db.prepare('SELECT * FROM users WHERE id=?').get(Number(result.lastInsertRowid));
+    });
+    return send(201,session(u));
+   }
    if(['/api/auth/register','/api/auth/login','/api/admin/login'].includes(path)&&method==='POST'){
+    if(path!=='/api/admin/login'&&!legacyPasswordAuth)fail(410,'Use SMS code to sign in. Update the app to continue.');
     const ip=trustProxy&&typeof req.headers['x-forwarded-for']==='string'?req.headers['x-forwarded-for'].split(',').at(-1).trim():req.socket.remoteAddress;const now=Date.now();for(const [key,value]of attempts)if(value.until<now)attempts.delete(key);
     let attempt=attempts.get(ip)||{count:0,until:now+900000};if(++attempt.count>30)fail(429,'Too many sign-in attempts. Try again in 15 minutes.');attempts.set(ip,attempt);
     const b=await readBody(req);const phone=text(b.phone,'Mobile number',10,10);if(!/^[6-9]\d{9}$/.test(phone))fail(400,'Enter a valid 10-digit Indian mobile number.');

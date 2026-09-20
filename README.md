@@ -25,13 +25,17 @@ For physical phones on the same Wi-Fi, run `HOST=0.0.0.0 npm run dev` and config
 
 ## Farmer and provider flow
 
-1. A provider registers with the labour-provider role and publishes crops, skills, worker count, daily rate and GPS base location.
-2. A farmer registers, sets farm location and searches by crop, skill and distance.
+1. A provider verifies a mobile number by SMS, completes a short profile and publishes crops, skills, worker count, daily rate and GPS base location.
+2. A farmer can browse teams without signing in. To book, the farmer verifies a mobile number by SMS, completes a short profile once, and sets the farm location.
 3. The farmer sends a request with work date, worker count and farm address.
 4. The provider opens Bookings and accepts or declines. Acceptance reserves daily team capacity; conflicting requests cannot be accepted.
 5. The farmer refreshes Bookings for confirmation, calls the provider or cancels. The provider can open farm directions, share live foreground GPS with the confirmed farmer and mark work completed.
 
-No providers, ratings or independent verification claims are fabricated. Real providers must register. Accounts use mobile number and password; SMS verification is not implemented.
+No providers, ratings or independent verification claims are fabricated. Real providers must register. Farmer and provider sign-in uses a six-digit SMS code rather than a password; existing accounts retain their bookings when they verify the same mobile number. KVK admins continue to use a separate password login. Old password registration and login endpoints are disabled by default.
+
+## Configure SMS login
+
+The API uses MSG91 SendOTP and Verify OTP. Register a sender and DLT-approved OTP template with MSG91, then set `MSG91_AUTH_KEY` and `MSG91_TEMPLATE_ID` in the server's private `.env` (see `.env.example`). The key is used only by the server and is never sent to the browser or Android app. Without these values, requesting an OTP returns a clear service-unavailable message; no fake code or insecure bypass is enabled. MSG91 must be configured and real delivery tested before farmers can sign in on a deployment. New users verify their number first, then provide their name, age, village and role. The server limits code requests and failed verification attempts, and signup tickets expire after ten minutes.
 
 Bookings persist in `.data/krishi.sqlite` across restarts. Server prices are preserved on each booking. Private API requests require authentication and ownership checks. Browser sessions use session storage; Android sessions use encrypted storage. Bookings share the farmer's name, phone, address and supplied farm coordinates with the selected provider.
 
@@ -61,7 +65,7 @@ Docker Compose runs the API with a persistent database volume behind Caddy HTTPS
 1. Point your domain's DNS at your server, install Docker with Compose and open ports 80 and 443.
 2. Copy `.env.example` to `.env` and set `APP_DOMAIN` to your hostname.
 3. Run `docker compose up --build -d`.
-4. Check `https://YOUR_DOMAIN/api/health`, then register provider and farmer accounts.
+4. Configure MSG91 credentials and check `https://YOUR_DOMAIN/api/health`, then verify provider and farmer accounts by SMS.
 5. Build Android release against `https://YOUR_DOMAIN`.
 
 `docker compose down` retains the database. Removing the `farm-data` volume deletes accounts and bookings. Back up that volume before replacing the server. Docker is not installed here, so deployment has not been executed.

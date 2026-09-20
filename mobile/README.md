@@ -2,6 +2,8 @@
 
 Native farmer/provider/KVK admin app with English and Marathi screens, GPS and server-backed bookings.
 
+Farmers and labour providers sign in with a mobile number and SMS code; they do not need a password. On first use they provide a name, age, village and role. The server must have MSG91 SendOTP credentials configured; see the root README. Existing accounts sign in with the same verified phone number. KVK admin sign-in still uses a password.
+
 ## Run
 
 From the repository root:
