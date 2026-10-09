@@ -1,0 +1,12 @@
+node_modules
+dist
+.tooling
+.data
+.git
+mobile
+artifacts
+test-results
+playwright-report
+.env
+*.jks
+*.keystore

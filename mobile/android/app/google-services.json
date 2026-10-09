@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "536777131043",
+    "project_id": "krishi-saathi-15868",
+    "storage_bucket": "krishi-saathi-15868.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:536777131043:android:d312dc1a724212ddfd9d96",
+        "android_client_info": {
+          "package_name": "in.krishisaathi.krishi_saathi"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDJH5yzKhaOpRIkdIIb-TnOUJjIBS-8E7I"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
