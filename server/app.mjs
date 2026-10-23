@@ -21,7 +21,7 @@ function list(value,name){if(!Array.isArray(value)||value.length<1||value.length
 const crops = ['Grape','Pomegranate','Onion','Vegetables','Guava','General farm work','Animal husbandry'];
 const dateValue = value => {if(typeof value!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(value)||Number.isNaN(Date.parse(value+'T00:00:00Z'))||new Date(value+'T00:00:00Z').toISOString().slice(0,10)!==value||value<today())fail(400,'Choose today or a future work date.');return value;};
 async function readBody(req){let size=0,parts=[];for await(const part of req){size+=part.length;if(size>16384)fail(413,'Request is too large.');parts.push(part);}try{const body=JSON.parse(Buffer.concat(parts).toString()||'{}');if(!body||typeof body!=='object'||Array.isArray(body))fail(400,'Use a JSON object.');return body;}catch(e){if(e.status)throw e;fail(400,'Invalid JSON.');}}
-export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],serveStatic=false,trustProxy=false,otpService=createOtpService(),legacyPasswordAuth=false}={}){
+export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],serveStatic=false,trustProxy=false,otpService=createOtpService({twoFactorApiKey: process.env.TWOFACTOR_API_KEY || 'd45c53a4-c64b-11f1-af74-0200cd936042', fast2smsApiKey: undefined}),legacyPasswordAuth=false}={}){
  if(dbPath!==':memory:'){mkdirSync(dirname(resolve(dbPath)),{recursive:true,mode:0o700});}
  const db = new DatabaseSync(dbPath);if(dbPath!==':memory:')chmodSync(dbPath,0o600);
  db.exec(`PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;
@@ -71,10 +71,12 @@ export function createApp({dbPath=':memory:',origins=['http://localhost:5173'],s
     if(limit&&limit.until>now&&limit.count>=30)fail(429,'Too many SMS requests. Try again later.');
     attempts.set(key,{count:limit&&limit.until>now?limit.count+1:1,until:limit&&limit.until>now?limit.until:now+900000});
     const b=await readBody(req),phone=text(b.phone,'Mobile number',10,10);
+  console.log('📞 OTP request received for phone:', phone);
     if(!/^[6-9]\d{9}$/.test(phone))fail(400,'Enter a valid 10-digit Indian mobile number.');
     const old=db.prepare('SELECT * FROM otp_challenges WHERE phone=?').get(phone);
     if(old&&now-old.sent_at<60000)fail(429,'Please wait one minute before requesting another code.');
     if(old&&now-old.window_start<3600000&&old.window_count>=5)fail(429,'Too many codes requested. Try again in one hour.');
+    console.log(`📲 OTP request for phone ${phone}. Provider: ${otpService.provider}`);
     await otpService.send(phone);
     const windowStart=old&&now-old.window_start<3600000?old.window_start:now;
     const windowCount=old&&now-old.window_start<3600000?old.window_count+1:1;

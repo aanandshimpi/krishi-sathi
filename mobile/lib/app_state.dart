@@ -56,6 +56,13 @@ class AppState extends ChangeNotifier {
     await loadTeams();
   }
 
+  Future<void> updateBaseUrl(String newUrl) async {
+    await api.setBaseUrl(newUrl);
+    error = null;
+    notifyListeners();
+    await loadTeams();
+  }
+
   Future<void> authenticate(
     Map<String, dynamic> body, {
     bool register = false,

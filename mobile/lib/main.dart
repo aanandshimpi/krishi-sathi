@@ -10,9 +10,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'app_state.dart';
 import 'admin_page.dart';
 import 'services/location_service.dart';
-import 'services/api_client.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 
 const green = Color(0xFF245B42);
 const cropNames = [
@@ -39,7 +37,7 @@ void main() async {
     if (kIsWeb) {
       await Firebase.initializeApp(
         options: const FirebaseOptions(
-          apiKey: 'AIzaSyDJH5yzKhaOpRIkdIIb-TnOUJjIBS-8E7I',
+          apiKey: 'AIzaSyCl4HBJt8s1fvPnxVhu1zWOc-nSPx4vsms',
           appId: '1:536777131043:web:f80aab22fc810200fd9d96',
           messagingSenderId: '536777131043',
           projectId: 'krishi-saathi-15868',
@@ -47,11 +45,7 @@ void main() async {
           storageBucket: 'krishi-saathi-15868.firebasestorage.app',
         ),
       );
-      // Disable reCAPTCHA verification for local development.
-      // REMOVE this line before deploying to production!
-      // await FirebaseAuth.instance.setSettings(
-      //   appVerificationDisabledForTesting: true,
-      // );
+
     } else {
       await Firebase.initializeApp();
     }
@@ -212,6 +206,61 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  Future<void> changeServer() async {
+    final controller = TextEditingController(text: s.api.baseUrl);
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(s.tr('Server Address', 'सर्व्हर पत्ता')),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              s.tr(
+                'Enter computer Wi-Fi IP and port:\n(e.g. http://192.168.15.160:3001)',
+                'संगणकाचा Wi-Fi IP आणि पोर्ट टाका:\n(उदा. http://192.168.15.160:3001)',
+              ),
+              style: const TextStyle(fontSize: 13, color: Colors.grey),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: const InputDecoration(
+                hintText: 'http://192.168.15.160:3001',
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, false),
+            child: Text(s.tr('Cancel', 'रद्द करा')),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(ctx, true),
+            child: Text(s.tr('Connect', 'जोडा')),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true && controller.text.trim().isNotEmpty) {
+      await s.updateBaseUrl(controller.text.trim());
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              s.tr(
+                'Server updated to ${controller.text.trim()}',
+                'सर्व्हर अपडेट केला: ${controller.text.trim()}',
+              ),
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) => Scaffold(
     appBar: AppBar(
@@ -226,6 +275,11 @@ class _HomePageState extends State<HomePage> {
         ],
       ),
       actions: [
+        IconButton(
+          icon: const Icon(Icons.settings_ethernet, size: 20),
+          tooltip: s.tr('Server IP', 'सर्व्हर IP'),
+          onPressed: changeServer,
+        ),
         TextButton(
           onPressed: s.language,
           child: Text(s.marathi ? 'English' : 'मराठी'),
@@ -396,9 +450,19 @@ class _HomePageState extends State<HomePage> {
       ),
     if (s.error != null) ...[
       Text(s.error!, style: const TextStyle(color: Colors.red)),
-      TextButton(
-        onPressed: s.loadTeams,
-        child: Text(s.tr('Try again', 'पुन्हा प्रयत्न करा')),
+      Wrap(
+        spacing: 8,
+        children: [
+          TextButton(
+            onPressed: s.loadTeams,
+            child: Text(s.tr('Try again', 'पुन्हा प्रयत्न करा')),
+          ),
+          TextButton.icon(
+            onPressed: changeServer,
+            icon: const Icon(Icons.settings_ethernet, size: 16),
+            label: Text(s.tr('Change server IP', 'सर्व्हर IP बदला')),
+          ),
+        ],
       ),
     ],
     if (!s.loading && s.error == null && s.teams.isEmpty)
@@ -873,7 +937,6 @@ class _AuthPageState extends State<AuthPage> {
   String step = 'phone', role = 'farmer', signupToken = '';
   String? firebaseVerificationId;
   int? firebaseResendToken;
-  ConfirmationResult? _webConfirmationResult;
   String? error;
   AppState get s => widget.state;
 
@@ -900,85 +963,10 @@ class _AuthPageState extends State<AuthPage> {
         if (mounted) Navigator.pop(context);
       } else if (step == 'phone') {
         final rawPhone = phone.text.trim();
-        if (Firebase.apps.isNotEmpty) {
-          try {
-            if (kIsWeb) {
-              // Web: signInWithPhoneNumber creates and manages invisible RecaptchaVerifier
-              _webConfirmationResult = await FirebaseAuth.instance
-                  .signInWithPhoneNumber('+91$rawPhone');
-            } else {
-              // Mobile: use verifyPhoneNumber for native SMS auto-retrieval
-              final completer = Completer<void>();
-              await FirebaseAuth.instance.verifyPhoneNumber(
-                phoneNumber: '+91$rawPhone',
-                verificationCompleted: (PhoneAuthCredential cred) async {
-                  try {
-                    final userCredential = await FirebaseAuth.instance.signInWithCredential(cred);
-                    final idToken = await userCredential.user?.getIdToken();
-                    if (idToken != null) {
-                      final res = await s.verifyFirebaseToken(idToken);
-                      if (res['needsProfile'] == true) {
-                        if (mounted) {
-                          setState(() {
-                            signupToken = res['signupToken'] as String;
-                            step = 'profile';
-                          });
-                        }
-                      } else if (mounted) {
-                        Navigator.pop(context);
-                      }
-                    }
-                  } catch (e) {
-                    if (mounted) setState(() => error = e.toString());
-                  }
-                },
-                verificationFailed: (FirebaseAuthException e) {
-                  if (!completer.isCompleted) completer.completeError(e);
-                },
-                codeSent: (String verId, int? resendToken) {
-                  firebaseVerificationId = verId;
-                  firebaseResendToken = resendToken;
-                  if (!completer.isCompleted) completer.complete();
-                },
-                codeAutoRetrievalTimeout: (String verId) {
-                  firebaseVerificationId = verId;
-                },
-                forceResendingToken: firebaseResendToken,
-              );
-              await completer.future.timeout(const Duration(seconds: 30));
-            }
-          } on FirebaseAuthException catch (e) {
-            throw ApiException(e.message ?? 'Firebase error: ${e.code}');
-          } on TimeoutException {
-            throw const ApiException('SMS delivery request timed out. Please check your network and try again.');
-          } catch (e) {
-            throw ApiException('Failed to send verification SMS: $e');
-          }
-        } else {
-          await s.requestOtp(rawPhone);
-        }
+        await s.requestOtp(rawPhone);
         if (mounted) setState(() => step = 'code');
       } else if (step == 'code') {
-        Map<String, dynamic> result;
-        if (kIsWeb && _webConfirmationResult != null) {
-          // Web: confirm the OTP via the ConfirmationResult
-          final userCredential = await _webConfirmationResult!.confirm(code.text.trim());
-          final idToken = await userCredential.user?.getIdToken();
-          if (idToken == null) throw Exception('Firebase ID token missing.');
-          result = await s.verifyFirebaseToken(idToken);
-        } else if (firebaseVerificationId != null && Firebase.apps.isNotEmpty) {
-          // Mobile: use PhoneAuthProvider credential
-          final credential = PhoneAuthProvider.credential(
-            verificationId: firebaseVerificationId!,
-            smsCode: code.text.trim(),
-          );
-          final userCredential = await FirebaseAuth.instance.signInWithCredential(credential);
-          final idToken = await userCredential.user?.getIdToken();
-          if (idToken == null) throw Exception('Firebase ID token missing.');
-          result = await s.verifyFirebaseToken(idToken);
-        } else {
-          result = await s.verifyOtp(phone.text.trim(), code.text.trim());
-        }
+        final result = await s.verifyOtp(phone.text.trim(), code.text.trim());
 
         if (result['needsProfile'] == true) {
           if (mounted) {
@@ -1127,26 +1115,7 @@ class _AuthPageState extends State<AuthPage> {
                         error = null;
                       });
                       try {
-                        if (firebaseVerificationId != null && Firebase.apps.isNotEmpty) {
-                          final completer = Completer<void>();
-                          await FirebaseAuth.instance.verifyPhoneNumber(
-                            phoneNumber: '+91${phone.text.trim()}',
-                            verificationCompleted: (_) {},
-                            verificationFailed: (e) {
-                              if (!completer.isCompleted) completer.completeError(e);
-                            },
-                            codeSent: (verId, resend) {
-                              firebaseVerificationId = verId;
-                              firebaseResendToken = resend;
-                              if (!completer.isCompleted) completer.complete();
-                            },
-                            codeAutoRetrievalTimeout: (verId) => firebaseVerificationId = verId,
-                            forceResendingToken: firebaseResendToken,
-                          );
-                          await completer.future.timeout(const Duration(seconds: 15));
-                        } else {
-                          await s.requestOtp(phone.text.trim());
-                        }
+                        await s.requestOtp(phone.text.trim());
                       } catch (e) {
                         if (mounted) setState(() => error = e.toString());
                       } finally {

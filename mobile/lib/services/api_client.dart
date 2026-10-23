@@ -14,17 +14,24 @@ class ApiException implements Exception {
 }
 
 class ApiClient {
+  static const List<String> androidCandidates = [
+    'http://192.168.15.160:3001', // Current Wi-Fi IP
+    'http://10.170.174.161:3001', // Previous Wi-Fi IP
+    'http://10.0.2.2:3001',        // Android Emulator host loopback
+    'http://127.0.0.1:3001',       // USB adb reverse
+  ];
+
   static String get defaultBaseUrl {
     const fromEnv = String.fromEnvironment('API_BASE_URL');
     if (fromEnv.isNotEmpty) return fromEnv;
     if (kIsWeb) return 'http://localhost:3001';
     if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
-      return 'http://127.0.0.1:3001';
+      return androidCandidates.first;
     }
     return 'http://localhost:3001';
   }
-  static const allowLocalHttp = bool.fromEnvironment('ALLOW_LOCAL_HTTP');
-  final String baseUrl;
+  static const allowLocalHttp = bool.fromEnvironment('ALLOW_LOCAL_HTTP', defaultValue: true);
+  String baseUrl;
   final http.Client client;
   final FlutterSecureStorage storage;
   final Duration requestTimeout;
@@ -40,6 +47,15 @@ class ApiClient {
 
   Future<void> restore() async {
     token = await storage.read(key: 'session');
+    final savedBase = await storage.read(key: 'custom_base_url');
+    if (savedBase != null && savedBase.isNotEmpty) {
+      baseUrl = savedBase;
+    }
+  }
+
+  Future<void> setBaseUrl(String url) async {
+    baseUrl = url.trim().replaceAll(RegExp(r'/+$'), '');
+    await storage.write(key: 'custom_base_url', value: baseUrl);
   }
 
   Future<void> saveToken(String value) async {
@@ -56,6 +72,13 @@ class ApiClient {
     String path, {
     String method = 'GET',
     Map<String, dynamic>? body,
+  }) => _requestWithFallback(path, method: method, body: body);
+
+  Future<Map<String, dynamic>> _requestWithFallback(
+    String path, {
+    String method = 'GET',
+    Map<String, dynamic>? body,
+    Set<String>? triedUrls,
   }) async {
     final uri = Uri.parse('$baseUrl/api$path');
     if (kReleaseMode && !allowLocalHttp && uri.scheme != 'https') {
@@ -82,6 +105,11 @@ class ApiClient {
           response.statusCode,
         );
       }
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        try {
+          unawaited(storage.write(key: 'custom_base_url', value: baseUrl).catchError((_) {}));
+        } catch (_) {}
+      }
       return data;
     } on ApiException {
       rethrow;
@@ -91,7 +119,24 @@ class ApiClient {
       );
     } on FormatException {
       throw const ApiException('The service returned an invalid response.');
-    } on Exception {
+    } on Exception catch (e) {
+      if (!kIsWeb && defaultTargetPlatform == TargetPlatform.android) {
+        final tried = triedUrls ?? {baseUrl};
+        for (final candidate in androidCandidates) {
+          if (!tried.contains(candidate)) {
+            baseUrl = candidate;
+            tried.add(candidate);
+            debugPrint('ApiClient retrying with fallback: $candidate');
+            return _requestWithFallback(
+              path,
+              method: method,
+              body: body,
+              triedUrls: tried,
+            );
+          }
+        }
+      }
+      debugPrint('ApiClient connection error: $e');
       throw const ApiException(
         'Cannot connect. Check your internet connection and retry.',
       );

@@ -21,3 +21,20 @@ test('unconfigured SMS provider never reports an OTP as sent',async()=>{
  await assert.rejects(service.send('9666666666'),{status:503});
  await assert.rejects(service.verify('9666666666','123456'),{status:503});
 });
+
+test('2Factor OTP adapter sends AUTOGEN and verifies matching code',async()=>{
+ const requests=[];
+ const service=createOtpService({twoFactorApiKey:'test-2factor-key',fetchImpl:async(url,options)=>{
+  requests.push({url:String(url),options});
+  if(requests.length===1){
+    return {status:200,ok:true,json:async()=>({Status:'Success',Details:'session-xyz-123'})};
+  }
+  return {status:200,ok:true,json:async()=>({Status:'Success',Details:'OTP Matched'})};
+ }});
+ assert.equal(service.provider,'2factor');
+ await service.send('9876543210');
+ assert.match(requests[0].url,/SMS\/9876543210\/AUTOGEN/);
+ const verified=await service.verify('9876543210','773854');
+ assert.equal(verified,true);
+ assert.match(requests[1].url,/SMS\/VERIFY\/session-xyz-123\/773854/);
+});
